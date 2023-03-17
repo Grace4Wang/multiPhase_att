@@ -1,0 +1,127 @@
+import torch.nn as nn
+import torch.nn.functional as F
+from scipy.stats import truncnorm
+
+from Att import NONLocalBlock3D
+from CoAtt_2P import CoAtt3D
+import torch
+
+'''
+特征提取的attention融合
+参考文章”Attention guided discriminative feature learning and adaptive fusion for grading hepatocellular 
+carcinoma with Contrast-enhanced MR“ 
+代码参考：https://github.com/Lsx0802/discriminative
+原文DOI:10.1016/j.compmedimag.2022.102050
+'''
+
+class LeNetAtt(nn.Module):
+    def __init__(self, num_classes=2):
+        super(LeNetAtt, self).__init__()
+
+        # modal 1 #
+        self.conv11 = nn.Conv3d(1, 32, 3, padding=1)
+        self.pool11 = nn.MaxPool3d(2, stride=2)
+        # self.nl11 = NONLocalBlock3D(32)
+
+        self.conv12 = nn.Conv3d(32, 64, 3, padding=1)
+        self.pool12 = nn.MaxPool3d(2, stride=2)
+        # self.nl12 = NONLocalBlock3D(64)
+
+        self.conv13 = nn.Conv3d(64, 64, 3, padding=1)
+        self.pool13 = nn.MaxPool3d(2, stride=2)
+        # self.nl13 = NONLocalBlock3D(64)
+
+        self.fc11 = nn.Linear(64 * 2 * 2 * 2, 500)
+        self.dropout11 = nn.Dropout(0.5)
+        self.fc12 = nn.Linear(500, 50)
+        self.dropout12 = nn.Dropout(0.5)
+
+        # modal 2 #
+        self.conv21 = nn.Conv3d(1, 32, 3, padding=1)
+        self.pool21 = nn.MaxPool3d(2, stride=2)
+        # self.nl21 = NONLocalBlock3D(32)
+
+        self.conv22 = nn.Conv3d(32, 64, 3, padding=1)
+        self.pool22 = nn.MaxPool3d(2, stride=2)
+        # self.nl22 = NONLocalBlock3D(64)
+
+        self.conv23 = nn.Conv3d(64, 64, 3, padding=1)
+        self.pool23 = nn.MaxPool3d(2, stride=2)
+        # self.nl23 = NONLocalBlock3D(64)
+
+        self.fc21 = nn.Linear(64 * 2 * 2 * 2, 500)
+        self.dropout21 = nn.Dropout(0.5)
+        self.fc22 = nn.Linear(500, 50)
+        self.dropout22 = nn.Dropout(0.5)
+
+
+        ### fusion
+        # self.Co1 = CoAtt3D(in_channels=32)
+        # self.Co2 = CoAtt3D(in_channels=64)
+        # self.Co3 = CoAtt3D(in_channels=64)
+
+        self.fcfusion = nn.Linear(50 * 2, num_classes)
+
+    def forward(self, x1, x2):
+        # stage 1
+        x1 = F.relu(self.conv11(x1))
+        # x1 = self.nl11(x1)
+
+        x2 = F.relu(self.conv21(x2))
+        # x2 = self.nl21(x2)
+
+
+        # x1, x2 = self.Co1(x1, x2)
+
+        x1 = self.pool11(x1)
+        x2 = self.pool21(x2)
+
+
+        # stage 2
+        x1 = F.relu(self.conv12(x1))
+        # x1 = self.nl12(x1)
+
+        x2 = F.relu(self.conv22(x2))
+        # x2 = self.nl22(x2)
+
+
+        # x1, x2 = self.Co2(x1, x2)
+
+        x1 = self.pool12(x1)
+        x2 = self.pool22(x2)
+
+        # stage 3
+        x1 = F.relu(self.conv13(x1))
+        # x1 = self.nl13(x1)
+
+        x2 = F.relu(self.conv23(x2))
+        # x2 = self.nl23(x2)
+
+        # x1, x2 = self.Co3(x1, x2)
+
+        x1 = self.pool13(x1)
+        x2 = self.pool23(x2)
+
+        # stage 4
+        x1 = x1.view(-1, 64 * 2 * 2 * 2)
+        x1 = F.relu(self.fc11(x1))  # output(1024)
+        x1 = self.dropout11(x1)
+        x1 = F.relu(self.fc12(x1))  # output(32)
+        f1 = x1
+        x1 = self.dropout12(x1)
+
+        x2 = x2.view(-1, 64 * 2 * 2 * 2)
+        x2 = F.relu(self.fc21(x2))  # output(1024)
+        x2 = self.dropout21(x2)
+        x2 = F.relu(self.fc22(x2))  # output(32)
+        f2 = x2
+        x2 = self.dropout22(x2)
+
+
+        # stage 5
+        x = torch.cat((x1, x2), dim=1)
+        t = x
+
+        # ABAF
+        x = self.fcfusion(x)  # output(2)
+        return x, f1, f2, t
